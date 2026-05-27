@@ -3,6 +3,7 @@ require("dotenv").config({ path: path.join(__dirname, ".env") });
 const fs = require("node:fs");
 const {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -86,6 +87,15 @@ function createGuildConfig() {
       allowedRoleIds: [],
       maxActiveRooms: 0,
     },
+    tickets: {
+      enabled: false,
+      openCategoryId: null,
+      logsChannelId: null,
+      staffRoleId: null,
+      panelChannelId: null,
+      panelMessageId: null,
+      counter: 0,
+    },
     ouvidoria: {
       forumChannelId: null,
     },
@@ -117,6 +127,7 @@ function createGuildState() {
     memberLastActivity: {},
     antiSpam: {},
     tempVoiceOwners: {},
+    tickets: {},
     onboardingAnswers: {},
     staffStats: {},
   };
@@ -124,11 +135,36 @@ function createGuildState() {
 
 function ensureGuildConfig(guildId) {
   if (!db.guilds[guildId]) db.guilds[guildId] = createGuildConfig();
+  const cfg = db.guilds[guildId];
+  cfg.voiceCreator = cfg.voiceCreator || {};
+  cfg.voiceCreator.enabled = !!cfg.voiceCreator.enabled;
+  cfg.voiceCreator.categoryId = cfg.voiceCreator.categoryId || null;
+  cfg.voiceCreator.panelChannelId = cfg.voiceCreator.panelChannelId || null;
+  cfg.voiceCreator.masterChannelId = cfg.voiceCreator.masterChannelId || null;
+  cfg.voiceCreator.masterChannelName = cfg.voiceCreator.masterChannelName || "➕ criar-sala";
+  cfg.voiceCreator.adminPanelMessageId = cfg.voiceCreator.adminPanelMessageId || null;
+  cfg.voiceCreator.allowedRoleIds = Array.isArray(cfg.voiceCreator.allowedRoleIds)
+    ? cfg.voiceCreator.allowedRoleIds
+    : [];
+  cfg.voiceCreator.maxActiveRooms = Number.isInteger(cfg.voiceCreator.maxActiveRooms)
+    ? cfg.voiceCreator.maxActiveRooms
+    : 0;
+
+  cfg.tickets = cfg.tickets || {};
+  cfg.tickets.enabled = !!cfg.tickets.enabled;
+  cfg.tickets.openCategoryId = cfg.tickets.openCategoryId || null;
+  cfg.tickets.logsChannelId = cfg.tickets.logsChannelId || null;
+  cfg.tickets.staffRoleId = cfg.tickets.staffRoleId || null;
+  cfg.tickets.panelChannelId = cfg.tickets.panelChannelId || null;
+  cfg.tickets.panelMessageId = cfg.tickets.panelMessageId || null;
+  cfg.tickets.counter = Number.isInteger(cfg.tickets.counter) ? cfg.tickets.counter : 0;
+
   return db.guilds[guildId];
 }
 
 function ensureGuildState(guildId) {
   if (!state.guilds[guildId]) state.guilds[guildId] = createGuildState();
+  state.guilds[guildId].tickets = state.guilds[guildId].tickets || {};
   return state.guilds[guildId];
 }
 
@@ -222,6 +258,95 @@ function buildVoiceOwnerPanel(guildId, channelId) {
       .setStyle(ButtonStyle.Danger)
   );
   return [row1, row2];
+}
+
+function canManageTicket(member, guildConfig, ticketOwnerId) {
+  if (!member) return false;
+  if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
+  if (ticketOwnerId && member.id === ticketOwnerId) return true;
+  return !!(guildConfig.tickets.staffRoleId && member.roles.cache.has(guildConfig.tickets.staffRoleId));
+}
+
+function buildTicketOpenPanel(guildId) {
+  const embed = new EmbedBuilder()
+    .setColor(COLORS.CYAN)
+    .setTitle("Central de Tickets")
+    .setDescription("Clique no botao abaixo para abrir um ticket privado com a equipe.");
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ticket:open:${guildId}`)
+      .setLabel("Abrir Ticket")
+      .setStyle(ButtonStyle.Primary)
+  );
+  return { embed, components: [row] };
+}
+
+function buildTicketControlPanel(guildId, channelId, isClosed) {
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ticket:close:${guildId}:${channelId}`)
+      .setLabel("Fechar")
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(!!isClosed),
+    new ButtonBuilder()
+      .setCustomId(`ticket:save:${guildId}:${channelId}`)
+      .setLabel("Guardar Registro")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`ticket:reopen:${guildId}:${channelId}`)
+      .setLabel("Reabertura")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(!isClosed)
+  );
+  return [row];
+}
+
+async function publishOrRefreshTicketPanel(guild, guildConfig) {
+  const panelChannel = guild.channels.cache.get(guildConfig.tickets.panelChannelId);
+  if (!panelChannel || panelChannel.type !== ChannelType.GuildText) return;
+  const payload = buildTicketOpenPanel(guild.id);
+  let panelMessage = null;
+  if (guildConfig.tickets.panelMessageId) {
+    panelMessage = await panelChannel.messages.fetch(guildConfig.tickets.panelMessageId).catch(() => null);
+  }
+  if (panelMessage) {
+    await panelMessage.edit({ embeds: [payload.embed], components: payload.components });
+    return panelMessage;
+  }
+  const sent = await panelChannel.send({ embeds: [payload.embed], components: payload.components });
+  guildConfig.tickets.panelMessageId = sent.id;
+  writeJson(CONFIG_FILE, db);
+  return sent;
+}
+
+async function collectTicketTranscript(channel) {
+  const all = [];
+  let before;
+  for (let i = 0; i < 10; i += 1) {
+    const batch = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
+    if (!batch || !batch.size) break;
+    all.push(...batch.values());
+    before = batch.last().id;
+    if (batch.size < 100) break;
+  }
+  all.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+  const lines = [];
+  lines.push(`Ticket transcript: #${channel.name}`);
+  lines.push(`Gerado em: ${new Date().toISOString()}`);
+  lines.push("--------------------------------------------------");
+
+  for (const msg of all) {
+    const when = new Date(msg.createdTimestamp).toISOString();
+    const author = `${msg.author?.tag || "desconhecido"} (${msg.author?.id || "?"})`;
+    const content = (msg.content || "").replace(/\r?\n/g, " ").trim();
+    const attachments = msg.attachments?.size
+      ? ` [anexos: ${[...msg.attachments.values()].map((a) => a.url).join(", ")}]`
+      : "";
+    lines.push(`[${when}] ${author}: ${content || "(sem texto)"}${attachments}`);
+  }
+
+  return lines.join("\n");
 }
 
 function buildVoiceAdminPanel(guild, guildConfig, guildState) {
@@ -618,6 +743,48 @@ function buildCommands() {
           .setRequired(true)
       ),
     new SlashCommandBuilder()
+      .setName("ticket_setup")
+      .setDescription("Configura o sistema de tickets")
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addChannelOption((o) =>
+        o
+          .setName("categoria_tickets")
+          .setDescription("Categoria onde os tickets serao criados")
+          .addChannelTypes(ChannelType.GuildCategory)
+          .setRequired(true)
+      )
+      .addChannelOption((o) =>
+        o
+          .setName("canal_registros")
+          .setDescription("Canal para guardar os registros")
+          .addChannelTypes(ChannelType.GuildText)
+          .setRequired(true)
+      )
+      .addRoleOption((o) =>
+        o
+          .setName("cargo_staff")
+          .setDescription("Cargo que pode visualizar/responder tickets")
+          .setRequired(true)
+      )
+      .addChannelOption((o) =>
+        o
+          .setName("canal_painel")
+          .setDescription("Canal do botao Abrir Ticket")
+          .addChannelTypes(ChannelType.GuildText)
+          .setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("ticket_painel")
+      .setDescription("Republica o painel de abrir ticket")
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addChannelOption((o) =>
+        o
+          .setName("canal")
+          .setDescription("Canal de texto para publicar")
+          .addChannelTypes(ChannelType.GuildText)
+          .setRequired(true)
+      ),
+    new SlashCommandBuilder()
       .setName("puxar_all")
       .setDescription("Move todos de uma sala de voz para outra")
       .setDefaultMemberPermissions(PermissionFlagsBits.MoveMembers)
@@ -780,6 +947,16 @@ async function reconcileVoiceCreatorState() {
   writeJson(STATE_FILE, state);
 }
 
+async function reconcileTicketPanels() {
+  for (const [guildId] of Object.entries(db.guilds || {})) {
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) continue;
+    const guildConfig = ensureGuildConfig(guildId);
+    if (!guildConfig.tickets.enabled || !guildConfig.tickets.panelChannelId) continue;
+    await publishOrRefreshTicketPanel(guild, guildConfig).catch(() => null);
+  }
+}
+
 function scheduleEdithRemoval(entry) {
   const ms = entry.expiresAt - Date.now();
   if (ms <= 0) return;
@@ -815,6 +992,7 @@ client.once("ready", async () => {
   console.log(`[READY] ${client.user.tag} online`);
   await registerCommands();
   await reconcileVoiceCreatorState();
+  await reconcileTicketPanels();
   pruneAutoRoleBuildSessions();
   setInterval(pruneAutoRoleBuildSessions, 5 * 60 * 1000).unref();
   for (const d of state.edithDelegations) scheduleEdithRemoval(d);
@@ -1097,6 +1275,217 @@ client.on("interactionCreate", async (interaction) => {
           await publishOrRefreshVoiceAdminPanel(guild, guildConfig, guildState).catch(() => null);
           return safeReply(interaction, {
             content: "Painel atualizado.",
+            ephemeral: true,
+          });
+        }
+      }
+
+      if (kind === "ticket") {
+        const guild = interaction.guild || (guildId ? await client.guilds.fetch(guildId) : null);
+        if (!guild) return;
+        const guildConfig = ensureGuildConfig(guild.id);
+        const guildState = ensureGuildState(guild.id);
+        guildState.tickets = guildState.tickets || {};
+
+        if (action === "open") {
+          if (!guildConfig.tickets.enabled) {
+            return safeReply(interaction, {
+              content: "Sistema de tickets nao esta configurado.",
+              ephemeral: true,
+            });
+          }
+          const existing = Object.entries(guildState.tickets).find(
+            ([, t]) => t.ownerId === interaction.user.id && t.status === "open"
+          );
+          if (existing) {
+            return safeReply(interaction, {
+              content: `Voce ja possui ticket aberto: <#${existing[0]}>`,
+              ephemeral: true,
+            });
+          }
+
+          const openCategory = guild.channels.cache.get(guildConfig.tickets.openCategoryId);
+          const logsChannel = guild.channels.cache.get(guildConfig.tickets.logsChannelId);
+          const staffRole = guild.roles.cache.get(guildConfig.tickets.staffRoleId);
+          if (
+            !openCategory ||
+            openCategory.type !== ChannelType.GuildCategory ||
+            !logsChannel ||
+            logsChannel.type !== ChannelType.GuildText ||
+            !staffRole
+          ) {
+            return safeReply(interaction, {
+              content: "Configuracao de tickets invalida. Rode /ticket_setup novamente.",
+              ephemeral: true,
+            });
+          }
+
+          guildConfig.tickets.counter = (guildConfig.tickets.counter || 0) + 1;
+          const ticketNumber = String(guildConfig.tickets.counter).padStart(4, "0");
+          const baseName = interaction.user.username
+            .toLowerCase()
+            .replace(/[^a-z0-9-_]/g, "")
+            .slice(0, 12);
+          const channelName = `ticket-${baseName || "user"}-${ticketNumber}`;
+
+          const ticketChannel = await guild.channels.create({
+            name: channelName,
+            type: ChannelType.GuildText,
+            parent: openCategory.id,
+            permissionOverwrites: [
+              {
+                id: guild.roles.everyone.id,
+                deny: [PermissionFlagsBits.ViewChannel],
+              },
+              {
+                id: interaction.user.id,
+                allow: [
+                  PermissionFlagsBits.ViewChannel,
+                  PermissionFlagsBits.SendMessages,
+                  PermissionFlagsBits.ReadMessageHistory,
+                  PermissionFlagsBits.AttachFiles,
+                ],
+              },
+              {
+                id: staffRole.id,
+                allow: [
+                  PermissionFlagsBits.ViewChannel,
+                  PermissionFlagsBits.SendMessages,
+                  PermissionFlagsBits.ReadMessageHistory,
+                  PermissionFlagsBits.AttachFiles,
+                  PermissionFlagsBits.ManageMessages,
+                ],
+              },
+              {
+                id: guild.members.me?.id || client.user.id,
+                allow: [
+                  PermissionFlagsBits.ViewChannel,
+                  PermissionFlagsBits.SendMessages,
+                  PermissionFlagsBits.ReadMessageHistory,
+                  PermissionFlagsBits.ManageChannels,
+                ],
+              },
+            ],
+          });
+
+          guildState.tickets[ticketChannel.id] = {
+            ownerId: interaction.user.id,
+            status: "open",
+            createdAt: nowIso(),
+            closedAt: null,
+            reopenedAt: null,
+            lastSavedAt: null,
+          };
+          writeJson(CONFIG_FILE, db);
+          writeJson(STATE_FILE, state);
+
+          await ticketChannel.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(COLORS.CYAN)
+                .setTitle("Ticket Aberto")
+                .setDescription(
+                  `Solicitante: <@${interaction.user.id}>\nEquipe: <@&${staffRole.id}>\nUse os botoes para fechar, guardar registro e reabrir.`
+                ),
+            ],
+            components: buildTicketControlPanel(guild.id, ticketChannel.id, false),
+          });
+
+          return safeReply(interaction, {
+            content: `Ticket criado: ${ticketChannel}`,
+            ephemeral: true,
+          });
+        }
+
+        const ticket = channelId ? guildState.tickets[channelId] : null;
+        if (!ticket) {
+          return safeReply(interaction, {
+            content: "Ticket nao encontrado no sistema.",
+            ephemeral: true,
+          });
+        }
+        const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+        if (!canManageTicket(member, guildConfig, ticket.ownerId)) {
+          return safeReply(interaction, {
+            content: "Voce nao tem permissao para essa acao no ticket.",
+            ephemeral: true,
+          });
+        }
+        const ticketChannel = guild.channels.cache.get(channelId);
+        if (!ticketChannel || ticketChannel.type !== ChannelType.GuildText) {
+          return safeReply(interaction, {
+            content: "Canal do ticket nao encontrado.",
+            ephemeral: true,
+          });
+        }
+
+        if (action === "close") {
+          if (ticket.status === "closed") {
+            return safeReply(interaction, { content: "Ticket ja esta fechado.", ephemeral: true });
+          }
+          await ticketChannel.permissionOverwrites.edit(ticket.ownerId, {
+            SendMessages: false,
+            AttachFiles: false,
+          });
+          ticket.status = "closed";
+          ticket.closedAt = nowIso();
+          writeJson(STATE_FILE, state);
+          await ticketChannel.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(COLORS.ALERT)
+                .setTitle("Ticket Fechado")
+                .setDescription(`Fechado por <@${interaction.user.id}>.`),
+            ],
+            components: buildTicketControlPanel(guild.id, ticketChannel.id, true),
+          });
+          return safeReply(interaction, { content: "Ticket fechado com sucesso.", ephemeral: true });
+        }
+
+        if (action === "reopen") {
+          if (ticket.status === "open") {
+            return safeReply(interaction, { content: "Ticket ja esta aberto.", ephemeral: true });
+          }
+          await ticketChannel.permissionOverwrites.edit(ticket.ownerId, {
+            ViewChannel: true,
+            SendMessages: true,
+            AttachFiles: true,
+          });
+          ticket.status = "open";
+          ticket.reopenedAt = nowIso();
+          writeJson(STATE_FILE, state);
+          await ticketChannel.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(COLORS.CYAN)
+                .setTitle("Ticket Reaberto")
+                .setDescription(`Reaberto por <@${interaction.user.id}>.`),
+            ],
+            components: buildTicketControlPanel(guild.id, ticketChannel.id, false),
+          });
+          return safeReply(interaction, { content: "Ticket reaberto com sucesso.", ephemeral: true });
+        }
+
+        if (action === "save") {
+          const logsChannel = guild.channels.cache.get(guildConfig.tickets.logsChannelId);
+          if (!logsChannel || logsChannel.type !== ChannelType.GuildText) {
+            return safeReply(interaction, {
+              content: "Canal de registros nao configurado/invalido.",
+              ephemeral: true,
+            });
+          }
+          const transcript = await collectTicketTranscript(ticketChannel);
+          const file = new AttachmentBuilder(Buffer.from(transcript, "utf8"), {
+            name: `${ticketChannel.name}.txt`,
+          });
+          await logsChannel.send({
+            content: `Registro do ticket ${ticketChannel} | Solicitante: <@${ticket.ownerId}> | Salvo por <@${interaction.user.id}>`,
+            files: [file],
+          });
+          ticket.lastSavedAt = nowIso();
+          writeJson(STATE_FILE, state);
+          return safeReply(interaction, {
+            content: `Registro enviado para ${logsChannel}.`,
             ephemeral: true,
           });
         }
@@ -1662,6 +2051,10 @@ client.on("interactionCreate", async (interaction) => {
           `Voice master: ${guildConfig.voiceCreator.masterChannelId ? `<#${guildConfig.voiceCreator.masterChannelId}>` : "nao definido"}`,
           `Voice painel admin: ${guildConfig.voiceCreator.panelChannelId ? `<#${guildConfig.voiceCreator.panelChannelId}>` : "nao definido"}`,
           `Voice limite global: ${guildConfig.voiceCreator.maxActiveRooms || 0}`,
+          `Tickets ativo: ${guildConfig.tickets.enabled ? "sim" : "nao"}`,
+          `Tickets categoria: ${guildConfig.tickets.openCategoryId ? `<#${guildConfig.tickets.openCategoryId}>` : "nao definido"}`,
+          `Tickets registros: ${guildConfig.tickets.logsChannelId ? `<#${guildConfig.tickets.logsChannelId}>` : "nao definido"}`,
+          `Tickets staff: ${guildConfig.tickets.staffRoleId ? `<@&${guildConfig.tickets.staffRoleId}>` : "nao definido"}`,
           `Quarentena: ${guildConfig.protocols.quarantineRoleId ? `<@&${guildConfig.protocols.quarantineRoleId}>` : "nao definido"}`,
         ];
         return safeReply(interaction, {
@@ -1739,6 +2132,41 @@ client.on("interactionCreate", async (interaction) => {
         content:
           "Selecione agora os cargos no menu abaixo. Vou publicar o painel com titulo, descricao e detalhes por cargo no canal escolhido.",
         components: [new ActionRowBuilder().addComponents(menu)],
+        ephemeral: true,
+      });
+    }
+
+    if (commandName === "ticket_setup") {
+      if (!isAdmin(interaction)) return safeReply(interaction, { content: "Apenas administradores.", ephemeral: true });
+      const ticketsCategory = interaction.options.getChannel("categoria_tickets", true);
+      const logsChannel = interaction.options.getChannel("canal_registros", true);
+      const staffRole = interaction.options.getRole("cargo_staff", true);
+      const panelChannel = interaction.options.getChannel("canal_painel", true);
+
+      guildConfig.tickets.enabled = true;
+      guildConfig.tickets.openCategoryId = ticketsCategory.id;
+      guildConfig.tickets.logsChannelId = logsChannel.id;
+      guildConfig.tickets.staffRoleId = staffRole.id;
+      guildConfig.tickets.panelChannelId = panelChannel.id;
+      writeJson(CONFIG_FILE, db);
+
+      await publishOrRefreshTicketPanel(guild, guildConfig).catch(() => null);
+      return safeReply(interaction, {
+        content:
+          `Sistema de tickets configurado.\nCategoria: ${ticketsCategory}\nRegistros: ${logsChannel}\nStaff: ${staffRole}\nPainel: ${panelChannel}`,
+        ephemeral: true,
+      });
+    }
+
+    if (commandName === "ticket_painel") {
+      if (!isAdmin(interaction)) return safeReply(interaction, { content: "Apenas administradores.", ephemeral: true });
+      const channel = interaction.options.getChannel("canal", true);
+      guildConfig.tickets.enabled = true;
+      guildConfig.tickets.panelChannelId = channel.id;
+      writeJson(CONFIG_FILE, db);
+      await publishOrRefreshTicketPanel(guild, guildConfig).catch(() => null);
+      return safeReply(interaction, {
+        content: `Painel de tickets publicado/atualizado em ${channel}.`,
         ephemeral: true,
       });
     }
@@ -2165,3 +2593,4 @@ if (!process.env.DISCORD_TOKEN) {
 }
 
 client.login(process.env.DISCORD_TOKEN);
+a

@@ -1,0 +1,37 @@
+{
+  "guilds": {
+    "1507676156852437023": {
+      "memberLastActivity": {
+        "819749462482223124": "2026-05-27T14:10:06.601Z",
+        "1508452708112404541": "2026-05-27T13:38:24.888Z"
+      },
+      "staffStats": {
+        "819749462482223124": {
+          "deletedMessages": 0,
+          "bans": 0,
+          "kicks": 0,
+          "timeouts": 0,
+          "voiceMs": 17184,
+          "voiceJoinAt": null,
+          "auctionsClosed": 0
+        }
+      },
+      "tempVoiceOwners": {},
+      "onboardingAnswers": {
+        "1508452708112404541": {
+          "idioma": "Português"
+        }
+      },
+      "antiSpam": {
+        "1507676156852437023:819749462482223124": {
+          "hits": [
+            1779890494061
+          ],
+          "linkHits": []
+        }
+      }
+    }
+  },
+  "anonymousThreads": {},
+  "edithDelegations": []
+}

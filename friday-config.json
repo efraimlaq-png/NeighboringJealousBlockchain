@@ -1,0 +1,75 @@
+{
+  "guilds": {
+    "1507676156852437023": {
+      "welcome": {
+        "enabled": true,
+        "dmTemplate": "⚔️ Seja bem-vindo ao servidor.  Aqui a organização vem antes da batalha. Nosso foco é montar partidas eficientes, fortalecer composições e manter uma comunicação limpa para que cada operação em Albion aconteça da forma certa.  Antes de entrar nas calls e grupos, siga este protocolo rápido:  📌 Passe pelo canal <#1508565336717525022> Para ter acesso ao Inicio do nosso e conquistar seus primeiros cargos. 📌 Configure seu acesso para receber chamadas, eventos e composições.    🛠️ Caso tenha qualquer problema com acesso, registro, builds ou funcionamento do sistema, procure a equipe em <#1509186387650543786>  ou chame um <@&1507676516945887332> .",
+        "rulesChannelId": null
+      },
+      "onboarding": {
+        "enabled": true,
+        "panelChannelId": null,
+        "questions": [
+          {
+            "key": "idioma",
+            "label": "Pergunta",
+            "type": "select",
+            "options": [
+              "Português",
+              "Inglês"
+            ],
+            "roleMap": {
+              "Português": "1509170076975235102",
+              "Inglês": "1509170155819765790"
+            }
+          }
+        ]
+      },
+      "autoRoles": {
+        "panels": [
+          {
+            "panelId": "mpo0wngy2as7b",
+            "channelId": "1508565336717525022",
+            "messageId": "1509167117927452834",
+            "title": "Boas-Vindas",
+            "description": "Olá! Bem-vindo(a) à nossa base de operações. 🛡️  Eu sou a S.E.X.T.A.-F.E.I.R.A. (FRIDAY). Meu sistema registra que você acaba de acessar a nossa rede. Para que tudo funcione com desempenho máximo e você tenha acesso total aos nossos recursos, recomendo que siga este checklist inicial:  📡 Atualize seus protocolos: Faça uma leitura completa do canal #regras. A segurança e o bom funcionamento do nosso servidor dependem da colaboração de todos os membros.  🪪 Identificação de acesso: Dirija-se ao canal #cargos (ou #roles) para configurar seu perfil. Isso vai calibrar sua interface e liberar as áreas específicas do servidor que mais combinam com as suas habilidades.  🗣️ Teste de comunicação: Conecte-se com os outros membros no #geral ou deixe um breve registro no #apresente-se. A equipe está sempre pronta para receber novos aliados.  Se os seus sistemas detectarem alguma anomalia ou se precisar de assistência técnica avançada, nossa equipe de administradores está operacional e pronta para intervir.  Todos os sistemas estão operando em níveis ideais. Aproveite sua estadia e faça bom uso da nossa rede.  S.E.X.T.A.-F.E.I.R.A. em modo de espera. 🔵",
+            "roles": [
+              "1508863647466651658"
+            ]
+          }
+        ]
+      },
+      "voiceCreator": {
+        "enabled": true,
+        "categoryId": "1508549177641009232",
+        "panelChannelId": "1509196371998281919",
+        "masterChannelId": "1509196901206065192",
+        "masterChannelName": "Criar Sala",
+        "userTextChannelId": null
+      },
+      "ouvidoria": {
+        "forumChannelId": null
+      },
+      "classes": {
+        "roleByClass": {
+          "tank": null,
+          "healer": null,
+          "dps_melee": null,
+          "dps_ranger": null,
+          "suporte": null
+        }
+      },
+      "protocols": {
+        "quarantineRoleId": null,
+        "containmentCategoryId": null,
+        "containmentChannelId": null,
+        "meetingCategoryId": null,
+        "staffRoleIds": [],
+        "edithRoleId": null
+      },
+      "automation": {
+        "boosterRoleId": null
+      }
+    }
+  }
+}
